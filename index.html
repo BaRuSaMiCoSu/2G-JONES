@@ -109,7 +109,7 @@ window.addEventListener('keydown', e => {
     keys.jump = true; jumpPressed = true;
   }
   if (e.key === 'm' || e.key === 'M') muted = !muted;
-  if (e.key === 'r' || e.key === 'R') { if (state === 'play') startGame(); }
+  if (e.key === 'r' || e.key === 'R') { if (state === 'play') startGame(stage, 'retry'); }
   anyPressed = true;
   initAudio();
 });
@@ -606,7 +606,14 @@ const MAP_W = 240, MAP_H = 14;
 let grid = [];           // 2次元タイル: 0=空, 1=地面, 2=店プラットフォーム, 3=ブロック
 let coins = [], enemies = [], items = [], goal = null, playerStart = { x: 32, y: 140 };
 
-function buildLevel() {
+// ステージ設定 (名前 / 画面の色味 / スクーターの突進速度)
+const STAGE_META = [
+  { name: 'あさの商店街',     tint: null,                  tint2: null,                scootSpd: 2.6 },
+  { name: 'ゆうぐれの商店街', tint: 'rgba(255,130,60,.13)', tint2: 'rgba(60,30,70,.22)', scootSpd: 2.9 },
+  { name: 'よるの商店街',     tint: 'rgba(20,28,70,.40)',  tint2: 'rgba(5,8,25,.22)',  scootSpd: 3.25 },
+];
+
+function buildLevel(stageNo = 0) {
   grid = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(0));
   coins = []; enemies = []; items = [];
 
@@ -616,75 +623,142 @@ function buildLevel() {
   const coinRow = (x, y, n) => { for (let i = 0; i < n; i++) coins.push({ x: (x + i) * TILE + 2, y: y * TILE + 2, got: false }); };
   const virus  = (x, y) => enemies.push({ type: 'virus', x0: x * TILE, y0: y * TILE, x: x * TILE, y: y * TILE, w: 12, h: 12, seed: x * 7, dead: 0, alive: true });
   const ped    = (x)   => enemies.push({ type: 'ped', x: x * TILE, y: 12 * TILE - 15, w: 10, h: 15, vx: -0.4, vy: 0, dead: 0, alive: true });
-  const scoot  = (x)   => enemies.push({ type: 'scoot', x: x * TILE, y: 12 * TILE - 15, w: 22, h: 14, vx: 0, vy: 0, mode: 'idle', t: 0, dir: -1, dead: 0, alive: true });
+  const scoot  = (x)   => enemies.push({ type: 'scoot', x: x * TILE, y: 12 * TILE - 15, w: 22, h: 14, vx: 0, vy: 0, mode: 'idle', t: 0, dir: -1, speed: STAGE_META[stageNo].scootSpd, dead: 0, alive: true });
   const maskAt = (x, y) => items.push({ type: 'mask', x: x * TILE, y: y * TILE, respawn: 0 });
   const tieAt  = (x, y) => items.push({ type: 'tie', x: x * TILE, y: y * TILE, respawn: 0 });
 
-  // ---- 地形 (穴 = 落ちるとゲームオーバー) ----
-  ground(0, 37);
-  ground(40, 69);
-  ground(72, 103);
-  ground(106, 146);
-  ground(149, 183);
-  ground(186, 239);
-
   playerStart = { x: 2 * TILE, y: 10 * TILE };
 
-  // ---- セクション1: チュートリアル通り ----
-  coinRow(8, 9, 4);
-  plat(14, 9, 4); coinRow(14, 7, 4);
-  virus(21, 7);
-  plat(22, 7, 3); coinRow(22, 5, 3);
-  plat(29, 9, 3); maskAt(30, 7);
-  ped(34);
+  if (stageNo === 0) {
+    // ============ STAGE 1: あさの商店街 (チュートリアル) ============
+    ground(0, 37); ground(40, 69); ground(72, 103);
+    ground(106, 146); ground(149, 183); ground(186, 239);
 
-  // ---- セクション2: 商店の軒先 ----
-  coinRow(44, 9, 3);
-  scoot(52);
-  block(55, 8, 3); coinRow(55, 6, 3);
-  ped(60);
-  plat(62, 8, 4); coinRow(62, 6, 4); virus(64, 5);
-  plat(66, 5, 3); tieAt(67, 3);
+    // セクション1: チュートリアル通り
+    coinRow(8, 9, 4);
+    plat(14, 9, 4); coinRow(14, 7, 4);
+    virus(21, 7);
+    plat(22, 7, 3); coinRow(22, 5, 3);
+    plat(29, 9, 3); maskAt(30, 7);
+    ped(34);
+    // セクション2: 商店の軒先
+    coinRow(44, 9, 3);
+    scoot(52);
+    block(55, 8, 3); coinRow(55, 6, 3);
+    ped(60);
+    plat(62, 8, 4); coinRow(62, 6, 4); virus(64, 5);
+    plat(66, 5, 3); tieAt(67, 3);
+    // セクション3: スクーター路地
+    coinRow(76, 9, 6);
+    scoot(84);
+    ped(90);
+    block(93, 9, 2); block(94, 8, 1);
+    virus(97, 6);
+    plat(99, 9, 3); maskAt(100, 7);
+    scoot(96);
+    // セクション4: 屋根の上へ
+    plat(110, 9, 3); coinRow(110, 7, 3);
+    plat(115, 7, 3); coinRow(115, 5, 3);
+    plat(120, 5, 4); coinRow(120, 3, 4);
+    virus(118, 4);
+    virus(126, 7);
+    maskAt(129, 10);
+    ped(133);
+    coinRow(136, 9, 5);
+    scoot(141);
+    // セクション5: 帰宅ラッシュの難所
+    ped(153); ped(158);
+    virus(156, 7);
+    plat(160, 8, 4); coinRow(160, 6, 4);
+    virus(165, 6);
+    plat(166, 5, 3); tieAt(167, 3);
+    scoot(174);
+    coinRow(171, 9, 6);
+    ped(179);
+    // セクション6: 会社までもうひと息
+    coinRow(190, 9, 4);
+    scoot(196);
+    block(202, 9, 2); block(204, 8, 2); block(206, 7, 2);
+    coinRow(202, 5, 6);
+    virus(212, 6);
+    ped(217);
+    maskAt(221, 10);
+    coinRow(224, 9, 6);
 
-  // ---- セクション3: スクーター路地 ----
-  coinRow(76, 9, 6);
-  scoot(84);
-  ped(90);
-  block(93, 9, 2); block(94, 8, 1);
-  virus(97, 6);
-  plat(99, 9, 3); maskAt(100, 7);
-  scoot(96);
+  } else if (stageNo === 1) {
+    // ============ STAGE 2: ゆうぐれの商店街 (穴が3マス幅に) ============
+    ground(0, 29); ground(33, 58); ground(62, 88);
+    ground(92, 120); ground(124, 155); ground(159, 190); ground(194, 239);
 
-  // ---- セクション4: 屋根の上へ ----
-  plat(110, 9, 3); coinRow(110, 7, 3);
-  plat(115, 7, 3); coinRow(115, 5, 3);
-  plat(120, 5, 4); coinRow(120, 3, 4);
-  virus(118, 4);
-  virus(126, 7);
-  maskAt(129, 10);
-  ped(133);
-  coinRow(136, 9, 5);
-  scoot(141);
+    coinRow(6, 9, 4);
+    ped(12); virus(16, 8);
+    plat(18, 9, 3); coinRow(18, 7, 3);
+    scoot(24);
+    plat(30, 8, 3); coinRow(30, 6, 3);         // 穴の上の橋
+    ped(38); virus(42, 7); virus(46, 9);
+    block(50, 9, 2); block(52, 8, 2); coinRow(50, 6, 4);
+    scoot(56);
+    plat(65, 9, 3); tieAt(66, 7);
+    virus(70, 6); ped(74);
+    coinRow(76, 9, 5);
+    scoot(80);
+    maskAt(85, 10);
+    virus(94, 8);
+    plat(96, 8, 4); coinRow(96, 6, 4); virus(100, 5);
+    ped(105); ped(110);
+    coinRow(108, 9, 6);
+    scoot(114);
+    plat(121, 8, 3); coinRow(121, 6, 3);       // 穴の上の橋
+    scoot(128); virus(132, 7);
+    plat(134, 9, 3); maskAt(135, 7);
+    block(140, 9, 2); block(142, 8, 2); block(144, 7, 2); coinRow(140, 5, 6);
+    virus(150, 6); ped(152);
+    scoot(162); scoot(170);                    // ダブルスクーター
+    coinRow(165, 9, 6);
+    plat(175, 8, 4); coinRow(175, 6, 4); virus(178, 5);
+    ped(183); maskAt(187, 10);
+    virus(197, 7); scoot(200); ped(205);
+    plat(208, 9, 3); plat(212, 7, 3); coinRow(212, 5, 3);
+    coinRow(220, 9, 8);
+    ped(224); virus(228, 6);
 
-  // ---- セクション5: 帰宅ラッシュの難所 ----
-  ped(153); ped(158);
-  virus(156, 7);
-  plat(160, 8, 4); coinRow(160, 6, 4);
-  virus(165, 6);
-  plat(166, 5, 3); tieAt(167, 3);
-  scoot(174);
-  coinRow(171, 9, 6);
-  ped(179);
+  } else {
+    // ============ STAGE 3: よるの商店街 (穴4マス幅 + 敵ラッシュ) ============
+    ground(0, 24); ground(28, 49); ground(54, 79); ground(83, 109);
+    ground(114, 139); ground(144, 169); ground(174, 204); ground(208, 239);
 
-  // ---- セクション6: 会社までもうひと息 ----
-  coinRow(190, 9, 4);
-  scoot(196);
-  block(202, 9, 2); block(204, 8, 2); block(206, 7, 2);
-  coinRow(202, 5, 6);
-  virus(212, 6);
-  ped(217);
-  maskAt(221, 10);
-  coinRow(224, 9, 6);
+    coinRow(6, 9, 4); virus(10, 8);
+    ped(14); scoot(18);
+    plat(20, 9, 3); coinRow(20, 7, 3);
+    plat(25, 8, 3); coinRow(25, 6, 3);         // 穴の上の橋
+    virus(30, 8); virus(34, 6);
+    ped(38); scoot(42); ped(46);
+    coinRow(40, 9, 5);
+    maskAt(56, 10); virus(60, 7);
+    plat(62, 8, 3); coinRow(62, 6, 3);
+    scoot(66);
+    plat(67, 9, 3); plat(71, 7, 3); plat(75, 5, 3);   // 屋根への階段
+    coinRow(71, 5, 3); coinRow(75, 3, 3); tieAt(76, 3);
+    virus(70, 5);
+    scoot(86); ped(90); scoot(94);
+    coinRow(88, 9, 5);
+    virus(98, 7); virus(102, 8);
+    plat(100, 8, 4); coinRow(100, 6, 4);
+    maskAt(106, 10);
+    virus(116, 8); ped(120); scoot(124); ped(128);
+    block(132, 9, 2); block(134, 8, 2); block(136, 7, 2); coinRow(132, 5, 6);
+    virus(146, 7); virus(150, 5);
+    plat(148, 8, 3); plat(152, 6, 3); coinRow(152, 4, 3);
+    scoot(158); ped(162);
+    coinRow(160, 9, 6);
+    scoot(178); ped(182); scoot(186);          // 終盤スクーターラッシュ
+    virus(190, 6);
+    coinRow(180, 9, 8);
+    maskAt(194, 10);
+    plat(196, 9, 3); plat(200, 7, 3); coinRow(200, 5, 3);
+    ped(212); virus(216, 7); scoot(220); ped(226);
+    coinRow(222, 9, 8); virus(228, 5);
+  }
 
   // ---- ゴール: 会社の入口 ----
   goal = { x: 232 * TILE, y: 8 * TILE, w: 32, h: 64 };
@@ -703,6 +777,9 @@ function solidAt(tx, ty) {
 let state = 'title';   // title / play / dead / clear
 let frame = 0;
 let score = 0, coinCount = 0, best = 0;
+let stage = 0;                              // 現在のステージ (0〜2)
+let stageStartScore = 0, stageStartCoins = 0; // リトライ用にステージ開始時の値を保存
+let bannerT = 0;                            // ステージ名表示タイマー
 let camX = 0;
 let particles = [], popups = [];
 let deadTimer = 0, clearTimer = 0;
@@ -717,9 +794,14 @@ const player = {
   coyote: 0,     // 崖から落ちた直後もジャンプ可能
 };
 
-function startGame() {
-  buildLevel();
-  score = 0; coinCount = 0;
+// mode: 'new'=最初から / 'retry'=同じステージをやり直し / 'next'=スコアを持ち越して次へ
+function startGame(stageNo = 0, mode = 'new') {
+  stage = stageNo;
+  if (mode === 'new') { score = 0; coinCount = 0; }
+  else if (mode === 'retry') { score = stageStartScore; coinCount = stageStartCoins; }
+  stageStartScore = score; stageStartCoins = coinCount;
+  bannerT = 150;
+  buildLevel(stage);
   player.x = playerStart.x; player.y = playerStart.y;
   player.vx = 0; player.vy = 0;
   player.masked = true; player.inv = 0; player.tie = 0;
@@ -808,7 +890,8 @@ function updatePlay() {
   if (player.jumpBuf > 0) {
     player.jumpBuf--;
     if (player.onGround || player.coyote > 0) {
-      player.vy = -6.4;
+      player.vy = -6.9; // 最高到達 約74px = 4タイルの足場に届く
+
       player.onGround = false;
       player.jumpBuf = 0; player.coyote = 0;
       SFX.jump();
@@ -900,7 +983,7 @@ function updatePlay() {
         e.vx = 0;
         if (e.t > 30) { e.mode = 'dash'; e.t = 0; }
       } else if (e.mode === 'dash') {
-        e.vx = e.dir * 2.6;
+        e.vx = e.dir * (e.speed || 2.6);
         if (e.t > 120) { e.mode = 'idle'; e.t = 0; }
       }
       e.vy = Math.min(5, e.vy + 0.32);
@@ -1145,6 +1228,10 @@ function drawHUD() {
     ctx.fillStyle = '#ff8080';
     if (Math.floor(frame / 20) % 2 === 0) ctx.fillText('なし!キケン', 180, 8);
   }
+  // ステージ表示
+  ctx.textAlign = 'right'; ctx.fillStyle = '#fff';
+  ctx.fillText('ST.' + (stage + 1) + '/' + STAGE_META.length, VIEW_W - 4, 8);
+  ctx.textAlign = 'left';
   // ネクタイ無敵ゲージ
   if (player.tie > 0) {
     ctx.fillStyle = '#fff'; ctx.fillText('無敵', 268, 8);
@@ -1195,7 +1282,7 @@ function drawTitle() {
   ctx.fillText('敵はふんづけて倒せ! 被弾するとマスクを失う!', 52, 156);
   ctx.fillText('マスクなしで被弾するとゲームオーバー…', 52, 168);
   ctx.fillText('予備マスクで回復 / 赤ネクタイで一時無敵!', 52, 180);
-  ctx.fillText('M: ミュート  R: リスタート', 52, 192);
+  ctx.fillText('全3ステージ: あさ→ゆうぐれ→よる / M:ミュート R:リスタート', 52, 192);
 }
 
 function drawGameOver() {
@@ -1212,12 +1299,19 @@ function drawGameOver() {
 function drawClear() {
   ctx.fillStyle = 'rgba(6,10,20,' + Math.min(0.6, clearTimer / 90) + ')';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  if (clearTimer > 40) {
-    drawCenteredText('STAGE CLEAR!', 72, 18, '#f5c542', '#4a2c08');
-    drawCenteredText('出社完了! おつかれさまでした', 96, 10, '#ffffff', '#1a2b50');
-    drawCenteredText('SCORE ' + score + '   COIN x' + coinCount, 118, 9, '#aef0ff', null);
-    drawCenteredText(player.masked ? 'マスクを守りきった! りっぱ!' : 'ギリギリ セーフ!', 136, 8, '#9df09d', null);
-    if (Math.floor(frame / 30) % 2 === 0) drawCenteredText('SPACE / タップ で タイトルへ', 158, 8, '#fff', null);
+  if (clearTimer <= 40) return;
+  const last = stage >= STAGE_META.length - 1;
+  if (last) {
+    drawCenteredText('ALL CLEAR!', 68, 18, '#f5c542', '#4a2c08');
+    drawCenteredText('出社完了! おつかれさまでした', 92, 10, '#ffffff', '#1a2b50');
+  } else {
+    drawCenteredText('STAGE ' + (stage + 1) + ' CLEAR!', 68, 18, '#f5c542', '#4a2c08');
+    drawCenteredText('つぎは「' + STAGE_META[stage + 1].name + '」', 92, 10, '#ffffff', '#1a2b50');
+  }
+  drawCenteredText('SCORE ' + score + '   COIN x' + coinCount, 114, 9, '#aef0ff', null);
+  drawCenteredText(player.masked ? 'マスクを守りきった! りっぱ!' : 'ギリギリ セーフ!', 132, 8, '#9df09d', null);
+  if (Math.floor(frame / 30) % 2 === 0) {
+    drawCenteredText(last ? 'SPACE / タップ で タイトルへ' : 'SPACE / タップ で つぎのステージへ', 154, 8, '#fff', null);
   }
 }
 
@@ -1244,8 +1338,9 @@ function loop(now) {
 function tick() {
   frame++;
   if (state === 'title') {
-    if (jumpPressed || (anyPressed && keys.jump)) startGame();
+    if (jumpPressed || (anyPressed && keys.jump)) startGame(0, 'new');
   } else if (state === 'play') {
+    if (bannerT > 0) bannerT--;
     updatePlay();
     updateParticles();
   } else if (state === 'dead') {
@@ -1254,7 +1349,7 @@ function tick() {
     player.vy = Math.min(5.5, player.vy + 0.25);
     player.y += player.vy;
     updateParticles();
-    if (deadTimer > 90 && jumpPressed) startGame();
+    if (deadTimer > 90 && jumpPressed) startGame(stage, 'retry');
   } else if (state === 'clear') {
     clearTimer++;
     updateParticles();
@@ -1267,7 +1362,10 @@ function tick() {
         t: 90, col: ['#f5c542', '#e04040', '#4a90d9', '#9df09d'][Math.floor(Math.random() * 4)],
       });
     }
-    if (clearTimer > 90 && jumpPressed) { state = 'title'; }
+    if (clearTimer > 90 && jumpPressed) {
+      if (stage < STAGE_META.length - 1) startGame(stage + 1, 'next');
+      else state = 'title';
+    }
   }
   jumpPressed = false;
   anyPressed = false;
@@ -1283,8 +1381,20 @@ function render() {
   drawItems();
   drawEnemies();
   drawPlayer();
+  // ステージごとの時間帯の色味 (夕暮れ / 夜)
+  const meta = STAGE_META[stage];
+  if (meta.tint)  { ctx.fillStyle = meta.tint;  ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
+  if (meta.tint2) { ctx.fillStyle = meta.tint2; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
   drawParticles();
   drawHUD();
+  // ステージ開始バナー
+  if (state === 'play' && bannerT > 0) {
+    const a = Math.min(1, bannerT / 30);
+    ctx.fillStyle = 'rgba(8,10,16,' + (0.6 * a).toFixed(3) + ')';
+    ctx.fillRect(0, 84, VIEW_W, 44);
+    drawCenteredText('STAGE ' + (stage + 1), 100, 13, 'rgba(245,197,66,' + a.toFixed(3) + ')', null);
+    drawCenteredText(meta.name, 116, 9, 'rgba(255,255,255,' + a.toFixed(3) + ')', null);
+  }
   if (state === 'dead') drawGameOver();
   if (state === 'clear') drawClear();
 }
