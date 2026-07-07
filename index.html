@@ -814,7 +814,7 @@ function updatePlay() {
       SFX.jump();
     }
   }
-  if (!keys.jump && player.vy < -2.5) player.vy = -2.5; // 可変ジャンプ
+  // (可変ジャンプは廃止: 一回押せば常にフルジャンプ)
 
   player.vy = Math.min(5.5, player.vy + 0.32);
   const prevBottom = player.y + player.h;
