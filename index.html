@@ -713,6 +713,8 @@ const player = {
   inv: 0,        // 被弾後の無敵フレーム
   tie: 0,        // ネクタイ無敵フレーム
   animT: 0, hitT: 0,
+  jumpBuf: 0,    // ジャンプ先行入力 (着地直前の入力を拾う)
+  coyote: 0,     // 崖から落ちた直後もジャンプ可能
 };
 
 function startGame() {
@@ -722,6 +724,7 @@ function startGame() {
   player.vx = 0; player.vy = 0;
   player.masked = true; player.inv = 0; player.tie = 0;
   player.facing = 1; player.hitT = 0;
+  player.jumpBuf = 0; player.coyote = 0;
   camX = 0;
   particles = []; popups = [];
   state = 'play';
@@ -798,9 +801,18 @@ function updatePlay() {
   player.vx = Math.max(-maxRun, Math.min(maxRun, player.vx));
   if (Math.abs(player.vx) < 0.05) player.vx = 0;
 
-  if (jumpPressed && player.onGround) {
-    player.vy = -6.4;
-    SFX.jump();
+  // ジャンプ: 先行入力バッファ + コヨーテタイムで連続ジャンプを取りこぼさない
+  if (jumpPressed) player.jumpBuf = 10;          // 着地の10フレーム前までの入力を有効化
+  if (player.onGround) player.coyote = 6;
+  else if (player.coyote > 0) player.coyote--;
+  if (player.jumpBuf > 0) {
+    player.jumpBuf--;
+    if (player.onGround || player.coyote > 0) {
+      player.vy = -6.4;
+      player.onGround = false;
+      player.jumpBuf = 0; player.coyote = 0;
+      SFX.jump();
+    }
   }
   if (!keys.jump && player.vy < -2.5) player.vy = -2.5; // 可変ジャンプ
 
