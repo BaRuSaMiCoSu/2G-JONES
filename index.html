@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ザ・マスクド・スーツ・クエスト - The Masked Suit Quest</title>
+<style>
+  /* ============================================================
+     ザ・マスクド・スーツ・クエスト (The Masked Suit Quest)
+     レトロ2D横スクロールアクション — 単一HTMLファイル版
+     すべてのアセット(スプライト/タイル/背景)はJSでピクセル単位に
+     生成しています。外部画像は不要です。
+     画像生成AIで作ったアセットに差し替える場合は、スクリプト内の
+     「ASSETS (アセット生成)」セクションを画像読み込みに置き換えて
+     ください。
+     ============================================================ */
+  html, body {
+    margin: 0; padding: 0;
+    background: #14161c;
+    height: 100%;
+    overflow: hidden;
+    touch-action: none;
+    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, monospace, sans-serif;
+  }
+  #wrap {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: #14161c;
+  }
+  #screen {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #000;
+  }
+  /* ---- タッチ操作ボタン (スマホ用) ---- */
+  #touch { display: none; }
+  @media (pointer: coarse) {
+    #touch { display: block; }
+  }
+  .tbtn {
+    position: fixed;
+    bottom: 4vh;
+    width: 15vmin; height: 15vmin;
+    min-width: 56px; min-height: 56px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.12);
+    border: 2px solid rgba(255,255,255,.35);
+    color: rgba(255,255,255,.85);
+    font-size: 5vmin;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none;
+    z-index: 10;
+  }
+  .tbtn:active { background: rgba(255,255,255,.3); }
+  #btnL { left: 4vw; }
+  #btnR { left: calc(4vw + 17vmin + 10px); }
+  #btnJ { right: 4vw; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="screen" width="384" height="216"></canvas></div>
+<div id="touch">
+  <div class="tbtn" id="btnL">&#9664;</div>
+  <div class="tbtn" id="btnR">&#9654;</div>
+  <div class="tbtn" id="btnJ">&#9650;</div>
+</div>
+
+<script>
+'use strict';
+/* ==================================================================
+   ザ・マスクド・スーツ・クエスト  The Masked Suit Quest
+   -----------------------------------------------------------------
+   主人公: 白いマスク・濃紺スーツ・赤ネクタイの男 (写真を16x16で再現)
+   マスク・システム:
+     - 開始時マスク着用 (体力2)
+     - 被弾でマスクが飛ぶ (体力1)
+     - マスク無しで被弾 → ゲームオーバー
+     - ステージ内の予備マスクで回復 (取った後も時間で再出現)
+   アイテム: マスク / 赤ネクタイ(一時無敵) / コイン
+   敵: ウイルス粒子(浮遊) / マスクを忘れて怒る通行人 / 赤いスクーター(突進)
+   ================================================================== */
+
+// ---------------- 基本設定 ----------------
+const VIEW_W = 384, VIEW_H = 216, TILE = 16;
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+function fitScreen() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const s = Math.max(1, Math.min(w / VIEW_W, h / VIEW_H));
+  canvas.style.width  = Math.floor(VIEW_W * s) + 'px';
+  canvas.style.height = Math.floor(VIEW_H * s) + 'px';
+}
+window.addEventListener('resize', fitScreen);
+fitScreen();
+
+// ---------------- 入力 ----------------
+const keys = { left:false, right:false, jump:false };
+let jumpPressed = false; // 押した瞬間
+let anyPressed  = false; // 画面遷移用
+
+window.addEventListener('keydown', e => {
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' ','Space'].includes(e.key) || e.code === 'Space') e.preventDefault();
+  if (e.repeat) return;
+  if (e.key === 'ArrowLeft'  || e.key === 'a' || e.key === 'A') keys.left = true;
+  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+  if (e.code === 'Space' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+    keys.jump = true; jumpPressed = true;
+  }
+  if (e.key === 'm' || e.key === 'M') muted = !muted;
+  if (e.key === 'r' || e.key === 'R') { if (state === 'play') startGame(); }
+  anyPressed = true;
+  initAudio();
+});
+window.addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft'  || e.key === 'a' || e.key === 'A') keys.left = false;
+  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+  if (e.code === 'Space' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') keys.jump = false;
+});
+
+// タッチボタン
+function bindBtn(id, prop) {
+  const el = document.getElementById(id);
+  const on  = e => { e.preventDefault(); keys[prop] = true; if (prop === 'jump') jumpPressed = true; anyPressed = true; initAudio(); };
+  const off = e => { e.preventDefault(); keys[prop] = false; };
+  el.addEventListener('pointerdown', on);
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointercancel', off);
+  el.addEventListener('pointerleave', off);
+}
+bindBtn('btnL','left'); bindBtn('btnR','right'); bindBtn('btnJ','jump');
+canvas.addEventListener('pointerdown', () => { anyPressed = true; initAudio(); });
+
+// ---------------- サウンド (WebAudio 簡易シンセ) ----------------
+let audioCtx = null, muted = false;
+function initAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+function beep(freq, dur, type, vol, slide) {
+  if (!audioCtx || muted) return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(20, freq + slide), t + dur);
+  g.gain.setValueAtTime(vol || 0.08, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+const SFX = {
+  jump()   { beep(320, 0.18, 'square', 0.06, 300); },
+  coin()   { beep(1200, 0.07, 'square', 0.06); setTimeout(() => beep(1600, 0.16, 'square', 0.06), 60); },
+  stomp()  { beep(220, 0.12, 'triangle', 0.1, -120); },
+  hurt()   { beep(200, 0.3, 'sawtooth', 0.09, -140); },
+  mask()   { beep(660, 0.1, 'square', 0.07); setTimeout(() => beep(880, 0.12, 'square', 0.07), 90); setTimeout(() => beep(1320, 0.2, 'square', 0.07), 180); },
+  tie()    { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.12, 'square', 0.07), i * 90)); },
+  dead()   { [392, 330, 262, 196].forEach((f, i) => setTimeout(() => beep(f, 0.25, 'triangle', 0.09), i * 180)); },
+  clear()  { [523, 659, 784, 1047, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.16, 'square', 0.07), i * 130)); },
+  rev()    { beep(90, 0.25, 'sawtooth', 0.07, 60); },
+};
+
+/* ==================================================================
+   ASSETS (アセット生成)
+   すべてのスプライトを文字列ピクセルマップ+パレットから生成。
+   外部画像に差し替えたい場合は、この節の各キャンバスを
+   new Image() で読み込んだ画像に置き換えてください。
+   ================================================================== */
+function sprite(rows, pal, w) {
+  const width = w || Math.max(...rows.map(r => r.length));
+  const c = document.createElement('canvas');
+  c.width = width; c.height = rows.length;
+  const g = c.getContext('2d');
+  for (let y = 0; y < rows.length; y++) {
+    for (let x = 0; x < rows[y].length; x++) {
+      const ch = rows[y][x];
+      if (ch !== '.' && pal[ch]) { g.fillStyle = pal[ch]; g.fillRect(x, y, 1, 1); }
+    }
+  }
+  return c;
+}
+function flipH(img) {
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const g = c.getContext('2d');
+  g.translate(img.width, 0); g.scale(-1, 1);
+  g.drawImage(img, 0, 0);
+  return c;
+}
+
+// ---- 主人公パレット (写真の再現: 黒髪/白マスク/濃紺スーツ/赤ネクタイ/白スニーカー) ----
+const PAL_HERO = {
+  H:'#2b2320', h:'#4a3c33',                 // 髪
+  S:'#eab68c', s:'#d19a72', O:'#8a4030',    // 肌 / 口
+  E:'#20242c',                              // 目
+  M:'#f6f8f9', m:'#c9d2d8',                 // マスク
+  W:'#ffffff',                              // シャツ
+  N:'#2e4a8f', n:'#22376b',                 // スーツ (濃紺)
+  R:'#d2242f', r:'#9c1a24',                 // ネクタイ (赤)
+  K:'#f2f2f2', b:'#3563cf',                 // スニーカー
+};
+// マスク無しバージョン: マスク色 → 肌色
+const PAL_HERO_NOMASK = Object.assign({}, PAL_HERO, { M: PAL_HERO.S, m: PAL_HERO.s });
+
+const HERO_HEAD = [
+  '................',
+  '....HHHHHH......',
+  '...HHHHHHHH.....',
+  '...HhHHHHHH.....',
+  '...HHSSSSES.....',
+  '...HHsMMMMM.....',
+  '....HsmMMMm.....',
+];
+const HERO_TORSO = [
+  '....NWRWN.......',
+  '...NNWRWNN......',
+  '...NNWRWNN......',
+  '...NNNRnNN......',
+  '...SnNNNNnS.....',
+];
+const LEGS_STAND = [
+  '....nn..nn......',
+  '....nn..nn......',
+  '....KK..KK......',
+  '...KKb..KKb.....',
+];
+const LEGS_WALK1 = [
+  '...nn...nn......',
+  '..nn.....nn.....',
+  '..KK.....KK.....',
+  '.KKb.....KKb....',
+];
+const LEGS_WALK2 = [
+  '....nn.nn.......',
+  '....nn..nn......',
+  '....KK..KK......',
+  '....Kb..KKb.....',
+];
+const LEGS_JUMP = [
+  '...nn...nn......',
+  '...Kb...nn......',
+  '........Kb......',
+  '................',
+];
+function heroFrame(legs) { return HERO_HEAD.concat(HERO_TORSO, legs); }
+
+// 被弾ポーズ (マスク無し・口が開いている・腕を上げる)
+const HERO_HIT = [
+  '................',
+  '....HHHHHH......',
+  '...HHHHHHHH.....',
+  '...HhHHHHHH.....',
+  '...HHSSSSES.....',
+  '...HHsSSOSS.....',
+  '....HsSSSs......',
+  '..S.NWRWN.S.....',
+  '..NNNWRWNNN.....',
+  '...NNWRWNN......',
+  '...NNNRnNN......',
+  '....nNNNNn......',
+  '...nn....nn.....',
+  '..nn......nn....',
+  '..KK......KK....',
+  '.KKb......KKb...',
+];
+// ゲームオーバーポーズ (正面向き・X目)
+const HERO_DEAD = [
+  '................',
+  '....HHHHHH......',
+  '...HHHHHHHH.....',
+  '...HHHHHHHH.....',
+  '...HESSSSEH.....',
+  '...HSSOOSSH.....',
+  '....SSSSSS......',
+  '....NWRWN.......',
+  '...NNWRWNN......',
+  '...NNWRWNN......',
+  '...SNNRNNS......',
+  '....nNNNn.......',
+  '....nn.nn.......',
+  '....nn.nn.......',
+  '....KK.KK.......',
+  '...KKb.KKb......',
+];
+
+function buildHero(pal) {
+  return {
+    stand: sprite(heroFrame(LEGS_STAND), pal, 16),
+    walk:  [sprite(heroFrame(LEGS_WALK1), pal, 16),
+            sprite(heroFrame(LEGS_STAND), pal, 16),
+            sprite(heroFrame(LEGS_WALK2), pal, 16),
+            sprite(heroFrame(LEGS_STAND), pal, 16)],
+    jump:  sprite(heroFrame(LEGS_JUMP), pal, 16),
+  };
+}
+const HERO_R  = buildHero(PAL_HERO);
+const HERO_NR = buildHero(PAL_HERO_NOMASK);
+const HERO_L  = { stand: flipH(HERO_R.stand), walk: HERO_R.walk.map(flipH), jump: flipH(HERO_R.jump) };
+const HERO_NL = { stand: flipH(HERO_NR.stand), walk: HERO_NR.walk.map(flipH), jump: flipH(HERO_NR.jump) };
+const HERO_HIT_R  = sprite(HERO_HIT, PAL_HERO_NOMASK, 16);
+const HERO_HIT_L  = flipH(HERO_HIT_R);
+const HERO_DEAD_S = sprite(HERO_DEAD, PAL_HERO_NOMASK, 16);
+
+// ---- 敵1: ウイルス粒子 (紫・ふわふわ・プログラム生成) ----
+function makeVirus(phase) {
+  const c = document.createElement('canvas');
+  c.width = 16; c.height = 16;
+  const g = c.getContext('2d');
+  const cx = 8, cy = 8, r = 4.6;
+  // トゲ (8方向、フレームで回転)
+  g.fillStyle = '#8a4fc4';
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4 + phase * Math.PI / 8;
+    const sx = Math.round(cx + Math.cos(a) * (r + 2));
+    const sy = Math.round(cy + Math.sin(a) * (r + 2));
+    g.fillRect(sx - 1, sy - 1, 2, 2);
+  }
+  // 本体
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const d = Math.hypot(x - cx + .5, y - cy + .5);
+    if (d < r) g.fillStyle = (x - y < -3) ? '#c99df0' : (x - y > 4 ? '#7a3aae' : '#a05fd6'), g.fillRect(x, y, 1, 1);
+  }
+  // 怒った目
+  g.fillStyle = '#2a1140';
+  g.fillRect(6, 7, 2, 2); g.fillRect(10, 7, 2, 2);
+  g.fillStyle = '#fff';
+  g.fillRect(6, 7, 1, 1); g.fillRect(10, 7, 1, 1);
+  return c;
+}
+const VIRUS_F = [makeVirus(0), makeVirus(1)];
+
+// ---- 敵2: マスクを忘れて怒っている通行人 ----
+const PAL_PED = {
+  h:'#585049', F:'#eda07a', f:'#d9805c', A:'#7a2818', E:'#26201c', D:'#8a3524',
+  C:'#a3794f', c:'#846037', g:'#4c4c55', e:'#2b2b2e', W:'#e8e4da',
+};
+const PED_TOP = [
+  '................',
+  '....hhhhhh......',
+  '...hhhhhhhh.....',
+  '...hFFFFFFF.....',
+  '...hFAFFAF......',
+  '...hFEFFEF......',
+  '...hfFDDDf......',
+  '....CCCCCC......',
+  '...CCCWCCCC.....',
+  '..FCCCWCCCF.....',
+  '...CCCWCCCC.....',
+  '....cccccc......',
+];
+const PED_LEGS1 = ['....gg..gg......', '....gg..gg......', '...ee...ee......', '................'];
+const PED_LEGS2 = ['...gg....gg.....', '..gg......gg....', '.ee........ee...', '................'];
+const PED_R = [sprite(PED_TOP.concat(PED_LEGS1), PAL_PED, 16), sprite(PED_TOP.concat(PED_LEGS2), PAL_PED, 16)];
+const PED_L = PED_R.map(flipH);
+
+// ---- 敵3: 赤いスクーター (写真の背景に停まっていたやつ) ----
+const PAL_SCOOT = {
+  R:'#e23a5f', r:'#a92044', k:'#1d1d21', w:'#c9c9c9', y:'#ffd94a', h:'#3a3a40', s:'#6b6b74',
+};
+const SCOOT_BASE = [
+  '........................',
+  '........................',
+  '........................',
+  '................hh......',
+  '...............hh.......',
+  '..RRRR.........hh.......',
+  '..RRRRR........Rh.......',
+  '...RRRRR......RRRy......',
+  '....RRRRRRRRRRRRRy......',
+  '....rRRRRRRRRRRRRr......',
+  '......RRRRRRRRRr........',
+];
+const SCOOT_W1 = [
+  '....kk.........kk.......',
+  '...kkkk.......kkkk......',
+  '...kwwk.......kwwk......',
+  '....kk.........kk.......',
+];
+const SCOOT_W2 = [
+  '....kk.........kk.......',
+  '...kkkk.......kkkk......',
+  '...ksks.......ksks......',
+  '....kk.........kk.......',
+];
+const SCOOT_R = [sprite(SCOOT_BASE.concat(SCOOT_W1), PAL_SCOOT, 24), sprite(SCOOT_BASE.concat(SCOOT_W2), PAL_SCOOT, 24)];
+const SCOOT_L = SCOOT_R.map(flipH);
+
+// ---- アイテム: マスク ----
+const MASK_ITEM = sprite([
+  '................',
+  '................',
+  '................',
+  '..s..........s..',
+  '.s............s.',
+  '.s..MMMMMMMM..s.',
+  '..ssMMMMMMMMss..',
+  '....MmmMMmmM....',
+  '....MMMMMMMM....',
+  '.....MMMMMM.....',
+  '......MMMM......',
+  '................',
+], { M:'#f6f8f9', m:'#c9d2d8', s:'#aab4bc' }, 16);
+
+// ---- アイテム: 赤ネクタイ (無敵) ----
+const TIE_ITEM = sprite([
+  '................',
+  '......RR........',
+  '.....RRRR.......',
+  '......RR........',
+  '......RR........',
+  '.....RRRR.......',
+  '.....RRRR.......',
+  '....RRRRRR......',
+  '....RRrrRR......',
+  '....RRRRRR......',
+  '.....RRRR.......',
+  '......RR........',
+], { R:'#d2242f', r:'#ff6b6b' }, 16);
+
+// ---- アイテム: コイン (プログラム生成・回転4フレーム) ----
+function makeCoin(sq) {
+  const c = document.createElement('canvas');
+  c.width = 12; c.height = 12;
+  const g = c.getContext('2d');
+  const w = Math.max(2, Math.round(10 * sq));
+  const x0 = Math.round((12 - w) / 2);
+  g.fillStyle = '#c9921e'; g.fillRect(x0, 1, w, 10);
+  g.fillStyle = '#f5c542'; g.fillRect(x0 + 1, 2, Math.max(1, w - 2), 8);
+  if (w > 5) { g.fillStyle = '#fff0b0'; g.fillRect(x0 + 2, 3, 1, 4); g.fillStyle = '#c9921e'; g.fillRect(5, 4, 2, 4); }
+  return c;
+}
+const COIN_F = [makeCoin(1), makeCoin(.66), makeCoin(.25), makeCoin(.66)];
+
+// ---- ゴール: 会社の入口 ----
+function makeGoal() {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#8d9299'; g.fillRect(0, 0, 32, 64);        // ビル壁
+  g.fillStyle = '#6f747c'; g.fillRect(0, 0, 32, 3);
+  g.fillStyle = '#3b4a63'; g.fillRect(4, 20, 24, 44);       // ガラス扉
+  g.fillStyle = '#5a7396'; g.fillRect(6, 22, 9, 40); g.fillRect(17, 22, 9, 40);
+  g.fillStyle = '#c8d4e0'; g.fillRect(7, 23, 2, 38);
+  g.fillStyle = '#e8e8e8'; g.fillRect(2, 6, 28, 11);        // 看板
+  g.fillStyle = '#1d3a6e';
+  g.font = 'bold 8px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('会社', 16, 12);
+  g.fillStyle = '#f5c542'; g.fillRect(14, 40, 2, 4);        // ドアノブ
+  return c;
+}
+const GOAL_IMG = makeGoal();
+
+// ---- タイル (濡れたアスファルト / 店先プラットフォーム / ブロック) ----
+function makeTiles() {
+  const t = {};
+  // 地面 (濡れたアスファルト表面)
+  let c = document.createElement('canvas'); c.width = 16; c.height = 16;
+  let g = c.getContext('2d');
+  g.fillStyle = '#41464e'; g.fillRect(0, 0, 16, 16);
+  g.fillStyle = '#565d68'; g.fillRect(0, 0, 16, 2);
+  g.fillStyle = '#6b7684'; g.fillRect(0, 0, 16, 1);
+  for (let i = 0; i < 14; i++) {
+    g.fillStyle = (i % 3 === 0) ? '#4c525c' : '#383d44';
+    g.fillRect((i * 7) % 16, 3 + (i * 5) % 12, 2, 1);
+  }
+  g.fillStyle = 'rgba(140,170,200,.25)'; g.fillRect(3, 1, 5, 1); g.fillRect(11, 1, 3, 1);
+  t.ground = c;
+  // 地中
+  c = document.createElement('canvas'); c.width = 16; c.height = 16;
+  g = c.getContext('2d');
+  g.fillStyle = '#33373e'; g.fillRect(0, 0, 16, 16);
+  for (let i = 0; i < 10; i++) { g.fillStyle = '#2b2f35'; g.fillRect((i * 11) % 16, (i * 7) % 16, 3, 1); }
+  t.dirt = c;
+  // 店先プラットフォーム (赤白の日よけテント屋根)
+  c = document.createElement('canvas'); c.width = 16; c.height = 16;
+  g = c.getContext('2d');
+  g.fillStyle = '#7c6248'; g.fillRect(0, 5, 16, 11);
+  g.fillStyle = '#6a523b'; g.fillRect(0, 5, 16, 1); g.fillRect(0, 10, 16, 1);
+  for (let i = 0; i < 4; i++) { g.fillStyle = i % 2 ? '#e8e2d5' : '#c43a3a'; g.fillRect(i * 4, 0, 4, 5); }
+  g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(0, 4, 16, 1);
+  t.shop = c;
+  // ブロック (縁石ブロック)
+  c = document.createElement('canvas'); c.width = 16; c.height = 16;
+  g = c.getContext('2d');
+  g.fillStyle = '#9aa3ad'; g.fillRect(0, 0, 16, 16);
+  g.fillStyle = '#b8c1cb'; g.fillRect(1, 1, 14, 2);
+  g.fillStyle = '#7c858f'; g.fillRect(1, 13, 14, 2);
+  g.fillStyle = '#666f79'; g.fillRect(0, 0, 1, 16); g.fillRect(15, 0, 1, 16); g.fillRect(0, 15, 16, 1); g.fillRect(0, 0, 16, 1);
+  t.block = c;
+  return t;
+}
+const TILES = makeTiles();
+
+// ---- 背景 (写真の日本の小道: 看板・店・電柱・電線) ----
+const SIGN_TEXTS = ['ラーメン', '定食', '酒', 'たばこ', '質', '薬局', '中村屋', '喫茶', '氷'];
+function makeBgFar() {
+  // 遠景: 曇り空 + 屋根のシルエット
+  const c = document.createElement('canvas'); c.width = 256; c.height = VIEW_H;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, VIEW_H);
+  grad.addColorStop(0, '#b9c6ce'); grad.addColorStop(.6, '#93a3ad'); grad.addColorStop(1, '#7e8e99');
+  g.fillStyle = grad; g.fillRect(0, 0, 256, VIEW_H);
+  g.fillStyle = '#6d7a87';
+  let x = 0;
+  const hs = [120, 100, 132, 92, 116, 104];
+  let i = 0;
+  while (x < 256) {
+    const w = 36 + (i * 17) % 24, h = hs[i % hs.length];
+    g.fillRect(x, VIEW_H - h, w, h);
+    g.fillStyle = '#5f6b78'; g.fillRect(x, VIEW_H - h, w, 3); g.fillStyle = '#6d7a87';
+    x += w; i++;
+  }
+  return c;
+}
+function makeBgMid() {
+  // 中景: 商店の壁・窓・日本語看板・日よけ・ポスター
+  const c = document.createElement('canvas'); c.width = 512; c.height = VIEW_H;
+  const g = c.getContext('2d');
+  const wallCols = ['#8d8577', '#7b8591', '#96897c', '#84796d'];
+  const awnCols  = [['#c43a3a', '#e8e2d5'], ['#2e6b4f', '#e8e2d5'], ['#31589c', '#dfe4ea']];
+  const groundY = VIEW_H - 24; // 建物の下端
+  for (let b = 0; b < 6; b++) {
+    const bx = b * 86, bw = 86;
+    g.fillStyle = wallCols[b % wallCols.length];
+    g.fillRect(bx, 40, bw, groundY - 40);
+    // 屋根の縁
+    g.fillStyle = '#55504a'; g.fillRect(bx, 40, bw, 4);
+    // 2階の窓
+    g.fillStyle = '#42506b';
+    for (let wx = 0; wx < 3; wx++) g.fillRect(bx + 8 + wx * 26, 52, 16, 18);
+    g.fillStyle = '#8fa8c4';
+    for (let wx = 0; wx < 3; wx++) g.fillRect(bx + 9 + wx * 26, 53, 6, 16);
+    // 日よけテント
+    const aw = awnCols[b % awnCols.length];
+    for (let s = 0; s < 10; s++) { g.fillStyle = aw[s % 2]; g.fillRect(bx + 4 + s * 8, 84, 8, 10); }
+    g.fillStyle = 'rgba(0,0,0,.3)'; g.fillRect(bx + 4, 92, 80, 2);
+    // 店の間口 (シャッター or ガラス)
+    if (b % 2 === 0) {
+      g.fillStyle = '#3d4a5e'; g.fillRect(bx + 8, 96, bw - 20, groundY - 96);
+      g.fillStyle = '#5d7590'; g.fillRect(bx + 10, 98, 24, groundY - 100); g.fillRect(bx + 38, 98, 24, groundY - 100);
+      g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(bx + 12, 100, 3, groundY - 104);
+      // ガラスに貼り紙
+      g.fillStyle = '#efe9da'; g.fillRect(bx + 42, 104, 12, 16); g.fillRect(bx + 14, 110, 10, 13);
+      g.fillStyle = '#b8442e'; g.fillRect(bx + 43, 106, 10, 2);
+    } else {
+      g.fillStyle = '#9aa0a8';
+      g.fillRect(bx + 8, 96, bw - 20, groundY - 96);
+      g.fillStyle = '#868c94';
+      for (let sy = 98; sy < groundY - 2; sy += 4) g.fillRect(bx + 8, sy, bw - 20, 2);
+    }
+    // 縦型の看板 (日本語)
+    const sc = document.createElement('canvas'); sc.width = 12; sc.height = 52;
+    const sg = sc.getContext('2d');
+    const signBg = ['#d8422e', '#274f8e', '#e0dbcd', '#2e6b4f'][b % 4];
+    sg.fillStyle = signBg; sg.fillRect(0, 0, 12, 52);
+    sg.fillStyle = (signBg === '#e0dbcd') ? '#333' : '#fff';
+    sg.font = '9px sans-serif'; sg.textAlign = 'center';
+    const txt = SIGN_TEXTS[b % SIGN_TEXTS.length];
+    for (let ch = 0; ch < Math.min(4, txt.length); ch++) sg.fillText(txt[ch], 6, 12 + ch * 12);
+    g.drawImage(sc, bx + bw - 14, 46);
+    g.fillStyle = '#444'; g.fillRect(bx + bw - 9, 40, 2, 6);
+  }
+  // 電線
+  g.strokeStyle = 'rgba(30,32,36,.7)'; g.lineWidth = 1;
+  for (let l = 0; l < 3; l++) {
+    g.beginPath();
+    for (let x = 0; x <= 512; x += 8) {
+      const y = 14 + l * 7 + Math.sin(x / 60 + l) * 3;
+      if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  // 舗道の縁 (建物の足元)
+  g.fillStyle = '#5a616b'; g.fillRect(0, groundY, 512, 4);
+  g.fillStyle = '#494f58'; g.fillRect(0, groundY + 4, 512, 20);
+  return c;
+}
+function makeBgPole() {
+  // 近景: 電柱レイヤー (透明背景)
+  const c = document.createElement('canvas'); c.width = 512; c.height = VIEW_H;
+  const g = c.getContext('2d');
+  for (const px of [70, 330]) {
+    g.fillStyle = '#6e6a62'; g.fillRect(px, 8, 7, VIEW_H - 8);
+    g.fillStyle = '#585349'; g.fillRect(px + 5, 8, 2, VIEW_H - 8);
+    g.fillStyle = '#55504a'; g.fillRect(px - 10, 14, 27, 4);   // 腕金
+    g.fillStyle = '#3d3a35'; g.fillRect(px - 8, 10, 3, 4); g.fillRect(px + 12, 10, 3, 4);
+    g.fillStyle = '#4a463f'; g.fillRect(px - 2, 30, 11, 14);   // トランス
+    // 巻き看板
+    g.fillStyle = '#d8d2c4'; g.fillRect(px - 1, 70, 9, 26);
+    g.fillStyle = '#b8442e'; g.font = '7px sans-serif'; g.textAlign = 'center';
+    g.fillText('質', px + 3.5, 80); g.fillText('屋', px + 3.5, 90);
+  }
+  return c;
+}
+const BG_FAR = makeBgFar(), BG_MID = makeBgMid(), BG_POLE = makeBgPole();
+
+/* ==================================================================
+   レベルデータ
+   ================================================================== */
+const MAP_W = 240, MAP_H = 14;
+let grid = [];           // 2次元タイル: 0=空, 1=地面, 2=店プラットフォーム, 3=ブロック
+let coins = [], enemies = [], items = [], goal = null, playerStart = { x: 32, y: 140 };
+
+function buildLevel() {
+  grid = Array.from({ length: MAP_H }, () => new Array(MAP_W).fill(0));
+  coins = []; enemies = []; items = [];
+
+  const ground = (x0, x1) => { for (let x = x0; x <= x1; x++) { grid[12][x] = 1; grid[13][x] = 1; } };
+  const plat   = (x, y, len) => { for (let i = 0; i < len; i++) grid[y][x + i] = 2; };
+  const block  = (x, y, len) => { for (let i = 0; i < (len || 1); i++) grid[y][x + i] = 3; };
+  const coinRow = (x, y, n) => { for (let i = 0; i < n; i++) coins.push({ x: (x + i) * TILE + 2, y: y * TILE + 2, got: false }); };
+  const virus  = (x, y) => enemies.push({ type: 'virus', x0: x * TILE, y0: y * TILE, x: x * TILE, y: y * TILE, w: 12, h: 12, seed: x * 7, dead: 0, alive: true });
+  const ped    = (x)   => enemies.push({ type: 'ped', x: x * TILE, y: 12 * TILE - 15, w: 10, h: 15, vx: -0.4, vy: 0, dead: 0, alive: true });
+  const scoot  = (x)   => enemies.push({ type: 'scoot', x: x * TILE, y: 12 * TILE - 15, w: 22, h: 14, vx: 0, vy: 0, mode: 'idle', t: 0, dir: -1, dead: 0, alive: true });
+  const maskAt = (x, y) => items.push({ type: 'mask', x: x * TILE, y: y * TILE, respawn: 0 });
+  const tieAt  = (x, y) => items.push({ type: 'tie', x: x * TILE, y: y * TILE, respawn: 0 });
+
+  // ---- 地形 (穴 = 落ちるとゲームオーバー) ----
+  ground(0, 37);
+  ground(40, 69);
+  ground(72, 103);
+  ground(106, 146);
+  ground(149, 183);
+  ground(186, 239);
+
+  playerStart = { x: 2 * TILE, y: 10 * TILE };
+
+  // ---- セクション1: チュートリアル通り ----
+  coinRow(8, 9, 4);
+  plat(14, 9, 4); coinRow(14, 7, 4);
+  virus(21, 7);
+  plat(22, 7, 3); coinRow(22, 5, 3);
+  plat(29, 9, 3); maskAt(30, 7);
+  ped(34);
+
+  // ---- セクション2: 商店の軒先 ----
+  coinRow(44, 9, 3);
+  scoot(52);
+  block(55, 8, 3); coinRow(55, 6, 3);
+  ped(60);
+  plat(62, 8, 4); coinRow(62, 6, 4); virus(64, 5);
+  plat(66, 5, 3); tieAt(67, 3);
+
+  // ---- セクション3: スクーター路地 ----
+  coinRow(76, 9, 6);
+  scoot(84);
+  ped(90);
+  block(93, 9, 2); block(94, 8, 1);
+  virus(97, 6);
+  plat(99, 9, 3); maskAt(100, 7);
+  scoot(96);
+
+  // ---- セクション4: 屋根の上へ ----
+  plat(110, 9, 3); coinRow(110, 7, 3);
+  plat(115, 7, 3); coinRow(115, 5, 3);
+  plat(120, 5, 4); coinRow(120, 3, 4);
+  virus(118, 4);
+  virus(126, 7);
+  maskAt(129, 10);
+  ped(133);
+  coinRow(136, 9, 5);
+  scoot(141);
+
+  // ---- セクション5: 帰宅ラッシュの難所 ----
+  ped(153); ped(158);
+  virus(156, 7);
+  plat(160, 8, 4); coinRow(160, 6, 4);
+  virus(165, 6);
+  plat(166, 5, 3); tieAt(167, 3);
+  scoot(174);
+  coinRow(171, 9, 6);
+  ped(179);
+
+  // ---- セクション6: 会社までもうひと息 ----
+  coinRow(190, 9, 4);
+  scoot(196);
+  block(202, 9, 2); block(204, 8, 2); block(206, 7, 2);
+  coinRow(202, 5, 6);
+  virus(212, 6);
+  ped(217);
+  maskAt(221, 10);
+  coinRow(224, 9, 6);
+
+  // ---- ゴール: 会社の入口 ----
+  goal = { x: 232 * TILE, y: 8 * TILE, w: 32, h: 64 };
+}
+
+function solidAt(tx, ty) {
+  if (tx < 0 || tx >= MAP_W) return true;
+  if (ty < 0) return false;
+  if (ty >= MAP_H) return false;
+  return grid[ty][tx] > 0;
+}
+
+/* ==================================================================
+   ゲーム状態
+   ================================================================== */
+let state = 'title';   // title / play / dead / clear
+let frame = 0;
+let score = 0, coinCount = 0, best = 0;
+let camX = 0;
+let particles = [], popups = [];
+let deadTimer = 0, clearTimer = 0;
+
+const player = {
+  x: 0, y: 0, vx: 0, vy: 0, w: 10, h: 15,
+  onGround: false, facing: 1, masked: true,
+  inv: 0,        // 被弾後の無敵フレーム
+  tie: 0,        // ネクタイ無敵フレーム
+  animT: 0, hitT: 0,
+};
+
+function startGame() {
+  buildLevel();
+  score = 0; coinCount = 0;
+  player.x = playerStart.x; player.y = playerStart.y;
+  player.vx = 0; player.vy = 0;
+  player.masked = true; player.inv = 0; player.tie = 0;
+  player.facing = 1; player.hitT = 0;
+  camX = 0;
+  particles = []; popups = [];
+  state = 'play';
+}
+
+function addPopup(x, y, text, col) { popups.push({ x, y, text, col: col || '#fff', t: 50 }); }
+function addBurst(x, y, col, n) {
+  for (let i = 0; i < (n || 6); i++) {
+    particles.push({ x, y, vx: (Math.random() - .5) * 2.4, vy: -Math.random() * 2.4 - .5, t: 30 + Math.random() * 15, col });
+  }
+}
+
+/* ==================================================================
+   更新処理
+   ================================================================== */
+function rectOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function moveAndCollide(o) {
+  // X軸
+  o.x += o.vx;
+  let l = Math.floor(o.x / TILE), r = Math.floor((o.x + o.w - 1) / TILE);
+  let t = Math.floor(o.y / TILE), b = Math.floor((o.y + o.h - 1) / TILE);
+  if (o.vx > 0) {
+    for (let ty = t; ty <= b; ty++) if (solidAt(r, ty)) { o.x = r * TILE - o.w; o.vx = 0; o.hitWall = true; break; }
+  } else if (o.vx < 0) {
+    for (let ty = t; ty <= b; ty++) if (solidAt(l, ty)) { o.x = (l + 1) * TILE; o.vx = 0; o.hitWall = true; break; }
+  }
+  // Y軸
+  o.y += o.vy;
+  l = Math.floor(o.x / TILE); r = Math.floor((o.x + o.w - 1) / TILE);
+  t = Math.floor(o.y / TILE); b = Math.floor((o.y + o.h - 1) / TILE);
+  o.onGround = false;
+  if (o.vy > 0) {
+    for (let tx = l; tx <= r; tx++) if (solidAt(tx, b)) { o.y = b * TILE - o.h; o.vy = 0; o.onGround = true; break; }
+  } else if (o.vy < 0) {
+    for (let tx = l; tx <= r; tx++) if (solidAt(tx, t)) { o.y = (t + 1) * TILE; o.vy = 0; break; }
+  }
+}
+
+function hurtPlayer() {
+  if (player.inv > 0 || player.tie > 0) return;
+  if (player.masked) {
+    // マスクが飛ぶ!
+    player.masked = false;
+    player.inv = 120;
+    player.hitT = 30;
+    player.vy = -3.4;
+    player.vx = -player.facing * 1.6;
+    SFX.hurt();
+    addPopup(player.x, player.y - 10, 'マスクが!', '#ff8080');
+    // マスクが飛んでいくパーティクル
+    particles.push({ x: player.x + 4, y: player.y, vx: -player.facing * 1.4, vy: -2.8, t: 60, col: null, img: MASK_ITEM, rot: true });
+  } else {
+    // マスク無しで被弾 → ゲームオーバー
+    killPlayer();
+  }
+}
+
+function killPlayer() {
+  state = 'dead';
+  deadTimer = 0;
+  player.vy = -5.5;
+  SFX.dead();
+}
+
+function updatePlay() {
+  // ---- プレイヤー操作 ----
+  const acc = 0.18, maxRun = 2.0;
+  if (keys.left)  { player.vx -= acc; player.facing = -1; }
+  if (keys.right) { player.vx += acc; player.facing = 1; }
+  if (!keys.left && !keys.right) player.vx *= player.onGround ? 0.8 : 0.95;
+  player.vx = Math.max(-maxRun, Math.min(maxRun, player.vx));
+  if (Math.abs(player.vx) < 0.05) player.vx = 0;
+
+  if (jumpPressed && player.onGround) {
+    player.vy = -6.4;
+    SFX.jump();
+  }
+  if (!keys.jump && player.vy < -2.5) player.vy = -2.5; // 可変ジャンプ
+
+  player.vy = Math.min(5.5, player.vy + 0.32);
+  const prevBottom = player.y + player.h;
+  moveAndCollide(player);
+  if (player.x < 0) { player.x = 0; player.vx = 0; }
+  if (player.x > MAP_W * TILE - player.w) player.x = MAP_W * TILE - player.w;
+
+  if (player.inv > 0) player.inv--;
+  if (player.tie > 0) player.tie--;
+  if (player.hitT > 0) player.hitT--;
+  if (Math.abs(player.vx) > 0.2 && player.onGround) player.animT++;
+
+  // 穴に落ちた
+  if (player.y > MAP_H * TILE + 16) { killPlayer(); return; }
+
+  // ---- コイン ----
+  for (const c of coins) {
+    if (c.got) continue;
+    if (rectOverlap(player, { x: c.x, y: c.y, w: 12, h: 12 })) {
+      c.got = true; coinCount++; score += 100;
+      SFX.coin();
+      addBurst(c.x + 6, c.y + 6, '#f5c542', 4);
+      addPopup(c.x, c.y - 6, '+100', '#f5c542');
+    }
+  }
+
+  // ---- アイテム ----
+  for (const it of items) {
+    if (it.respawn > 0) { it.respawn--; continue; }
+    const bob = Math.sin(frame * 0.08 + it.x) * 2;
+    const box = { x: it.x, y: it.y + bob, w: 16, h: 14 };
+    if (!rectOverlap(player, box)) continue;
+    if (it.type === 'mask') {
+      if (!player.masked) {
+        player.masked = true;
+        score += 200;
+        addPopup(it.x, it.y - 8, 'マスク回復!', '#aef0ff');
+      } else {
+        score += 500;
+        addPopup(it.x, it.y - 8, '+500', '#aef0ff');
+      }
+      SFX.mask();
+      addBurst(it.x + 8, it.y + 8, '#f6f8f9', 8);
+      it.respawn = 900; // 15秒後に再出現 (再収集可能)
+    } else if (it.type === 'tie') {
+      player.tie = 480; // 8秒間無敵
+      score += 300;
+      SFX.tie();
+      addPopup(it.x, it.y - 8, '無敵タイム!', '#ff6b6b');
+      addBurst(it.x + 8, it.y + 8, '#d2242f', 10);
+      it.respawn = 1800;
+    }
+  }
+
+  // ---- 敵 ----
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (e.dead > 0) { e.dead++; e.y += 2.5; if (e.dead > 40) e.alive = false; continue; }
+
+    if (e.type === 'virus') {
+      e.x = e.x0 + Math.sin((frame + e.seed) * 0.022) * 26;
+      e.y = e.y0 + Math.sin((frame + e.seed) * 0.055) * 9;
+    } else if (e.type === 'ped') {
+      e.vy = Math.min(5, e.vy + 0.32);
+      e.hitWall = false;
+      moveAndCollide(e);
+      // 壁 or 崖で折り返す
+      if (e.hitWall) e.vx = -e.vx;
+      else if (e.onGround) {
+        const aheadX = e.vx < 0 ? e.x - 1 : e.x + e.w + 1;
+        if (!solidAt(Math.floor(aheadX / TILE), Math.floor((e.y + e.h + 2) / TILE))) e.vx = -e.vx;
+      }
+    } else if (e.type === 'scoot') {
+      e.t++;
+      if (e.mode === 'idle') {
+        e.vx = 0;
+        const dx = (player.x + player.w / 2) - (e.x + e.w / 2);
+        if (Math.abs(dx) < 150 && Math.abs(player.y - e.y) < 48 && e.t > 60) {
+          e.mode = 'rev'; e.t = 0; e.dir = dx > 0 ? 1 : -1;
+          SFX.rev();
+        }
+      } else if (e.mode === 'rev') {
+        e.vx = 0;
+        if (e.t > 30) { e.mode = 'dash'; e.t = 0; }
+      } else if (e.mode === 'dash') {
+        e.vx = e.dir * 2.6;
+        if (e.t > 120) { e.mode = 'idle'; e.t = 0; }
+      }
+      e.vy = Math.min(5, e.vy + 0.32);
+      e.hitWall = false;
+      moveAndCollide(e);
+      if (e.hitWall) { e.mode = 'idle'; e.t = 0; }
+      if (e.y > MAP_H * TILE + 32) e.alive = false; // 穴に落ちたスクーター
+    }
+
+    // プレイヤーとの当たり判定
+    if (rectOverlap(player, e)) {
+      const stomp = player.vy > 0 && prevBottom <= e.y + 6;
+      if (player.tie > 0) {
+        // 無敵: 触れるだけで倒せる
+        e.dead = 1; score += 150;
+        SFX.stomp();
+        addBurst(e.x + e.w / 2, e.y + e.h / 2, '#ff6b6b', 8);
+        addPopup(e.x, e.y - 8, '+150', '#ff6b6b');
+      } else if (stomp) {
+        e.dead = 1;
+        player.vy = -4.6;
+        const pts = e.type === 'scoot' ? 200 : 100;
+        score += pts;
+        SFX.stomp();
+        addBurst(e.x + e.w / 2, e.y, '#ffffff', 6);
+        addPopup(e.x, e.y - 8, '+' + pts, '#fff');
+      } else {
+        hurtPlayer();
+        if (state !== 'play') return;
+      }
+    }
+  }
+
+  // ---- ゴール ----
+  if (goal && rectOverlap(player, goal)) {
+    state = 'clear'; clearTimer = 0;
+    score += 1000;
+    best = Math.max(best, score);
+    SFX.clear();
+  }
+
+  // ---- カメラ ----
+  const target = player.x + player.w / 2 - VIEW_W / 2;
+  camX = Math.max(0, Math.min(MAP_W * TILE - VIEW_W, target));
+}
+
+function updateParticles() {
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.t--;
+  }
+  particles = particles.filter(p => p.t > 0);
+  for (const p of popups) { p.y -= 0.5; p.t--; }
+  popups = popups.filter(p => p.t > 0);
+}
+
+/* ==================================================================
+   描画処理
+   ================================================================== */
+function drawBackground() {
+  // 遠景 (視差 0.2)
+  let ox = -(camX * 0.2) % 256;
+  for (let x = ox - 256; x < VIEW_W + 256; x += 256) ctx.drawImage(BG_FAR, Math.floor(x), 0);
+  // 中景 (視差 0.5)
+  ox = -(camX * 0.5) % 512;
+  for (let x = ox - 512; x < VIEW_W + 512; x += 512) ctx.drawImage(BG_MID, Math.floor(x), 0);
+  // 電柱 (視差 0.75)
+  ox = -(camX * 0.75) % 512;
+  for (let x = ox - 512; x < VIEW_W + 512; x += 512) ctx.drawImage(BG_POLE, Math.floor(x), 0);
+}
+
+function drawTiles() {
+  const x0 = Math.floor(camX / TILE), x1 = Math.min(MAP_W - 1, x0 + Math.ceil(VIEW_W / TILE) + 1);
+  const camY = MAP_H * TILE - VIEW_H; // 縦は固定
+  for (let ty = 0; ty < MAP_H; ty++) {
+    for (let tx = x0; tx <= x1; tx++) {
+      const t = grid[ty][tx];
+      if (!t) continue;
+      const sx = tx * TILE - Math.floor(camX), sy = ty * TILE - camY;
+      if (t === 1) {
+        const surface = !solidAt(tx, ty - 1);
+        ctx.drawImage(surface ? TILES.ground : TILES.dirt, sx, sy);
+        if (surface) {
+          // 濡れた路面のきらめき
+          const sh = Math.sin(frame * 0.05 + tx * 1.7);
+          if (sh > 0.55) {
+            ctx.fillStyle = 'rgba(160,195,225,' + (0.14 * (sh - 0.55) * 2.2).toFixed(3) + ')';
+            ctx.fillRect(sx + 2, sy + 1, 11, 1);
+          }
+          // 水たまり (座標で決定的に配置)
+          if ((tx * 7919) % 13 === 0) {
+            ctx.fillStyle = 'rgba(140,175,210,.30)';
+            ctx.fillRect(sx + 1, sy, 14, 2);
+            ctx.fillStyle = 'rgba(210,230,245,.35)';
+            ctx.fillRect(sx + 3 + Math.floor(Math.sin(frame * .04 + tx) * 2 + 2), sy, 4, 1);
+          }
+        }
+      } else if (t === 2) ctx.drawImage(TILES.shop, sx, sy);
+      else if (t === 3) ctx.drawImage(TILES.block, sx, sy);
+    }
+  }
+}
+
+function worldToScreen(x, y) {
+  return [Math.floor(x - camX), Math.floor(y - (MAP_H * TILE - VIEW_H))];
+}
+
+function drawCoins() {
+  const f = COIN_F[Math.floor(frame / 8) % 4];
+  for (const c of coins) {
+    if (c.got) continue;
+    const [sx, sy] = worldToScreen(c.x, c.y);
+    if (sx < -16 || sx > VIEW_W + 16) continue;
+    ctx.drawImage(f, sx, sy);
+  }
+}
+
+function drawItems() {
+  for (const it of items) {
+    if (it.respawn > 0) continue;
+    const bob = Math.sin(frame * 0.08 + it.x) * 2;
+    const [sx, sy] = worldToScreen(it.x, it.y + bob);
+    if (sx < -20 || sx > VIEW_W + 20) continue;
+    // 淡い光
+    ctx.fillStyle = it.type === 'mask' ? 'rgba(180,230,255,.15)' : 'rgba(255,120,120,.15)';
+    ctx.fillRect(sx - 1, sy - 1, 18, 16);
+    ctx.drawImage(it.type === 'mask' ? MASK_ITEM : TIE_ITEM, sx, sy);
+  }
+}
+
+function drawEnemies() {
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    let [sx, sy] = worldToScreen(e.x, e.y);
+    if (sx < -32 || sx > VIEW_W + 32) continue;
+    ctx.save();
+    if (e.dead > 0) { ctx.globalAlpha = Math.max(0, 1 - e.dead / 40); ctx.translate(sx + e.w / 2, sy + e.h / 2); ctx.scale(1, -1); ctx.translate(-(sx + e.w / 2), -(sy + e.h / 2)); }
+    if (e.type === 'virus') {
+      ctx.drawImage(VIRUS_F[Math.floor(frame / 12) % 2], sx - 2, sy - 2);
+    } else if (e.type === 'ped') {
+      const img = (e.vx > 0 ? PED_R : PED_L)[Math.floor(frame / 10) % 2];
+      ctx.drawImage(img, sx - 3, sy - 1);
+      // 怒りマーク
+      if (Math.floor(frame / 30) % 2 === 0) {
+        ctx.fillStyle = '#e04040';
+        const ax = sx + (e.vx > 0 ? 10 : -2);
+        ctx.fillRect(ax, sy - 6, 2, 2); ctx.fillRect(ax + 3, sy - 6, 2, 2);
+        ctx.fillRect(ax, sy - 3, 2, 2); ctx.fillRect(ax + 3, sy - 3, 2, 2);
+      }
+    } else if (e.type === 'scoot') {
+      let img = (e.dir > 0 ? SCOOT_R : SCOOT_L)[Math.floor(frame / (e.mode === 'dash' ? 4 : 12)) % 2];
+      const shake = e.mode === 'rev' ? Math.floor(Math.random() * 2) : 0;
+      ctx.drawImage(img, sx - 1, sy + shake - 1);
+      if (e.mode === 'dash') {
+        // 排気ガス
+        ctx.fillStyle = 'rgba(200,200,200,.5)';
+        const bx = e.dir > 0 ? sx - 4 : sx + 24;
+        ctx.fillRect(bx + Math.floor(Math.random() * 3), sy + 8, 3, 3);
+      }
+    }
+    ctx.restore();
+  }
+}
+
+function drawPlayer() {
+  if (player.inv > 0 && Math.floor(frame / 4) % 2 === 0 && state === 'play') return; // 点滅
+  let [sx, sy] = worldToScreen(player.x - 3, player.y - 1);
+  let img;
+  if (state === 'dead') {
+    img = HERO_DEAD_S;
+  } else if (player.hitT > 0) {
+    img = player.facing > 0 ? HERO_HIT_R : HERO_HIT_L;
+  } else {
+    const set = player.masked ? (player.facing > 0 ? HERO_R : HERO_L)
+                              : (player.facing > 0 ? HERO_NR : HERO_NL);
+    if (!player.onGround) img = set.jump;
+    else if (Math.abs(player.vx) > 0.2) img = set.walk[Math.floor(player.animT / 6) % 4];
+    else img = set.stand;
+  }
+  ctx.save();
+  if (player.tie > 0) {
+    // ネクタイ無敵: 虹色に光る
+    const hue = (frame * 12) % 360;
+    ctx.shadowColor = 'hsl(' + hue + ',90%,60%)';
+    ctx.shadowBlur = 4;
+    if (player.tie < 120 && Math.floor(frame / 6) % 2 === 0) { ctx.shadowBlur = 0; } // 残りわずかで点滅
+  }
+  ctx.drawImage(img, sx, sy);
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const [sx, sy] = worldToScreen(p.x, p.y);
+    if (p.img) {
+      ctx.save();
+      ctx.translate(sx + 8, sy + 8);
+      if (p.rot) ctx.rotate(p.t * 0.2);
+      ctx.globalAlpha = Math.min(1, p.t / 20);
+      ctx.drawImage(p.img, -8, -8);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = p.col;
+      ctx.globalAlpha = Math.min(1, p.t / 15);
+      ctx.fillRect(sx, sy, 2, 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'left';
+  for (const p of popups) {
+    const [sx, sy] = worldToScreen(p.x, p.y);
+    ctx.fillStyle = '#00000090';
+    ctx.fillText(p.text, sx + 1, sy + 1);
+    ctx.fillStyle = p.col;
+    ctx.fillText(p.text, sx, sy);
+  }
+}
+
+function drawGoal() {
+  if (!goal) return;
+  const [sx, sy] = worldToScreen(goal.x, goal.y);
+  if (sx < -40 || sx > VIEW_W + 40) return;
+  ctx.drawImage(GOAL_IMG, sx, sy);
+}
+
+function drawHUD() {
+  ctx.fillStyle = 'rgba(10,12,18,.55)';
+  ctx.fillRect(0, 0, VIEW_W, 14);
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('SCORE ' + String(score).padStart(6, '0'), 5, 8);
+  // コイン
+  ctx.drawImage(COIN_F[Math.floor(frame / 8) % 4], 100, 1);
+  ctx.fillText('x' + String(coinCount).padStart(2, '0'), 114, 8);
+  // マスク状態
+  ctx.fillText('MASK', 152, 8);
+  if (player.masked) {
+    ctx.drawImage(MASK_ITEM, 178, -1);
+    ctx.fillStyle = '#9df09d'; ctx.fillText('OK', 196, 8);
+  } else {
+    ctx.fillStyle = '#ff8080';
+    if (Math.floor(frame / 20) % 2 === 0) ctx.fillText('なし!キケン', 180, 8);
+  }
+  // ネクタイ無敵ゲージ
+  if (player.tie > 0) {
+    ctx.fillStyle = '#fff'; ctx.fillText('無敵', 268, 8);
+    ctx.fillStyle = '#40202a'; ctx.fillRect(290, 4, 60, 6);
+    const hue = (frame * 12) % 360;
+    ctx.fillStyle = 'hsl(' + hue + ',85%,60%)';
+    ctx.fillRect(290, 4, Math.floor(60 * player.tie / 480), 6);
+  }
+}
+
+function drawCenteredText(text, y, size, col, outline) {
+  ctx.font = 'bold ' + size + 'px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (outline) {
+    ctx.fillStyle = outline;
+    for (const [ox, oy] of [[-1,0],[1,0],[0,-1],[0,1],[1,1],[-1,-1]]) ctx.fillText(text, VIEW_W / 2 + ox, y + oy);
+  }
+  ctx.fillStyle = col;
+  ctx.fillText(text, VIEW_W / 2, y);
+}
+
+function drawTitle() {
+  drawBackground();
+  // タイトル用の地面
+  const camY = MAP_H * TILE - VIEW_H;
+  for (let tx = 0; tx < 25; tx++) {
+    ctx.drawImage(TILES.ground, tx * 16, 12 * 16 - camY);
+    ctx.drawImage(TILES.dirt, tx * 16, 13 * 16 - camY);
+  }
+  // デモ: 主人公が歩く
+  const t = frame % 480;
+  const px = (t < 240) ? -20 + t : 460 - t;
+  const dir = t < 240 ? 1 : -1;
+  const set = dir > 0 ? HERO_R : HERO_L;
+  ctx.drawImage(set.walk[Math.floor(frame / 6) % 4], Math.floor(px), 12 * 16 - camY - 16);
+
+  ctx.fillStyle = 'rgba(8,10,16,.45)';
+  ctx.fillRect(0, 26, VIEW_W, 96);
+  drawCenteredText('THE MASKED SUIT QUEST', 46, 16, '#f5c542', '#4a2c08');
+  drawCenteredText('ザ・マスクド・スーツ・クエスト', 66, 11, '#ffffff', '#1a2b50');
+  drawCenteredText('～マスクを守って会社へ急げ!～', 84, 8, '#aec8e0', null);
+  if (Math.floor(frame / 30) % 2 === 0) drawCenteredText('SPACE / タップ で スタート', 108, 9, '#ffffff', '#000');
+
+  ctx.fillStyle = 'rgba(8,10,16,.45)';
+  ctx.fillRect(40, 132, VIEW_W - 80, 66);
+  ctx.font = '8px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = '#dfe6ee';
+  ctx.fillText('←→ / A D : いどう    SPACE / ↑ : ジャンプ', 52, 144);
+  ctx.fillText('敵はふんづけて倒せ! 被弾するとマスクを失う!', 52, 156);
+  ctx.fillText('マスクなしで被弾するとゲームオーバー…', 52, 168);
+  ctx.fillText('予備マスクで回復 / 赤ネクタイで一時無敵!', 52, 180);
+  ctx.fillText('M: ミュート  R: リスタート', 52, 192);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(6,6,10,' + Math.min(0.7, deadTimer / 80) + ')';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  if (deadTimer > 60) {
+    drawCenteredText('GAME OVER', 86, 18, '#e04040', '#2a0808');
+    drawCenteredText('マスクは大事に…', 108, 9, '#ffffff', null);
+    drawCenteredText('SCORE ' + score, 126, 9, '#f5c542', null);
+    if (Math.floor(frame / 30) % 2 === 0) drawCenteredText('SPACE / タップ で もういちど', 148, 8, '#fff', null);
+  }
+}
+
+function drawClear() {
+  ctx.fillStyle = 'rgba(6,10,20,' + Math.min(0.6, clearTimer / 90) + ')';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  if (clearTimer > 40) {
+    drawCenteredText('STAGE CLEAR!', 72, 18, '#f5c542', '#4a2c08');
+    drawCenteredText('出社完了! おつかれさまでした', 96, 10, '#ffffff', '#1a2b50');
+    drawCenteredText('SCORE ' + score + '   COIN x' + coinCount, 118, 9, '#aef0ff', null);
+    drawCenteredText(player.masked ? 'マスクを守りきった! りっぱ!' : 'ギリギリ セーフ!', 136, 8, '#9df09d', null);
+    if (Math.floor(frame / 30) % 2 === 0) drawCenteredText('SPACE / タップ で タイトルへ', 158, 8, '#fff', null);
+  }
+}
+
+/* ==================================================================
+   メインループ
+   ================================================================== */
+let lastTime = 0, acc = 0;
+const STEP = 1000 / 60;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (!lastTime) lastTime = now;
+  acc += Math.min(100, now - lastTime);
+  lastTime = now;
+  let stepped = false;
+  while (acc >= STEP) {
+    acc -= STEP;
+    tick();
+    stepped = true;
+  }
+  if (stepped) render();
+}
+
+function tick() {
+  frame++;
+  if (state === 'title') {
+    if (jumpPressed || (anyPressed && keys.jump)) startGame();
+  } else if (state === 'play') {
+    updatePlay();
+    updateParticles();
+  } else if (state === 'dead') {
+    deadTimer++;
+    // 倒れて落ちていく演出
+    player.vy = Math.min(5.5, player.vy + 0.25);
+    player.y += player.vy;
+    updateParticles();
+    if (deadTimer > 90 && jumpPressed) startGame();
+  } else if (state === 'clear') {
+    clearTimer++;
+    updateParticles();
+    // 紙吹雪
+    if (clearTimer % 8 === 0 && clearTimer < 240) {
+      particles.push({
+        x: camX + Math.random() * VIEW_W,
+        y: (MAP_H * TILE - VIEW_H) + Math.random() * 40,
+        vx: (Math.random() - .5), vy: 0.6 + Math.random(),
+        t: 90, col: ['#f5c542', '#e04040', '#4a90d9', '#9df09d'][Math.floor(Math.random() * 4)],
+      });
+    }
+    if (clearTimer > 90 && jumpPressed) { state = 'title'; }
+  }
+  jumpPressed = false;
+  anyPressed = false;
+}
+
+function render() {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  if (state === 'title') { drawTitle(); return; }
+  drawBackground();
+  drawTiles();
+  drawGoal();
+  drawCoins();
+  drawItems();
+  drawEnemies();
+  drawPlayer();
+  drawParticles();
+  drawHUD();
+  if (state === 'dead') drawGameOver();
+  if (state === 'clear') drawClear();
+}
+
+buildLevel();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
